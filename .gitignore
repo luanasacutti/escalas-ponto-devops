@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+
+# Sistema operacional e editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Dependencias/cache
+vendor/
+node_modules/
+__pycache__/
+*.pyc
+
+# Logs e arquivos temporarios
+*.log
+tmp/
+temp/
+
+# Dumps locais de banco
+*.sql.gz
+*.dump
+*.bak

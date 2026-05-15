@@ -1,0 +1,24 @@
+﻿services:
+  mysql_ponto:
+    image: mysql:8
+    container_name: mysql_ponto_devops
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: escala_ponto_devops_php
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./schema_mysql_escalas_e_ponto.sql:/docker-entrypoint-initdb.d/01_schema.sql
+
+  php_app:
+    image: php:8.2-apache
+    container_name: php_ponto_devops
+    restart: always
+    depends_on:
+      - mysql_ponto
+    ports:
+      - "8080:80"
+    volumes:
+      - ./demo_app:/var/www/html
+    command: bash -c "docker-php-ext-install pdo pdo_mysql && apache2-foreground"
