@@ -25,6 +25,22 @@ Sistema escolar para gerenciamento de escalas de trabalho e relogio de ponto, de
 
 ## Como rodar
 
+### Requisitos
+
+Para rodar em qualquer computador, e necessario ter:
+
+- Docker Desktop instalado
+- Docker Desktop aberto/rodando
+- Acesso ao terminal na pasta do projeto
+
+### Rodando pelo GitHub ou pelo ZIP
+
+Se estiver usando o ZIP:
+
+1. Extraia o arquivo `.zip`
+2. Abra a pasta extraida no terminal
+3. Execute o comando abaixo
+
 Na pasta do projeto:
 
 ```bash
@@ -36,6 +52,8 @@ Depois acesse:
 ```txt
 http://localhost:8080
 ```
+
+Se tudo estiver correto, a tela de login sera exibida.
 
 ## Login de teste
 
@@ -75,3 +93,43 @@ schema_mysql_escalas_e_ponto.sql
 ```
 
 O container cria o banco automaticamente na primeira subida.
+
+## Observacao sobre portas
+
+A aplicacao usa as portas:
+
+```txt
+8080 - aplicacao PHP no navegador
+3307 - MySQL
+```
+
+Se outro programa ja estiver usando alguma dessas portas, o Docker pode mostrar erro ao iniciar.
+
+Nesse caso, altere as portas no arquivo:
+
+```txt
+docker-compose.php.yml
+```
+
+Exemplo:
+
+```yml
+ports:
+  - "8081:80"
+```
+
+Depois acesse:
+
+```txt
+http://localhost:8081
+```
+
+## Parar a aplicacao
+
+Para parar os containers, pressione `CTRL + C` no terminal onde o Docker esta rodando.
+
+Se quiser parar em segundo plano, use:
+
+```bash
+docker compose -f docker-compose.php.yml down
+```
