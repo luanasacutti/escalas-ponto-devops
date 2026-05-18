@@ -22,6 +22,26 @@ function funcionario_tem_folga(PDO $pdo, int $funcionarioId, string $data): bool
     return (int)$stmt->fetchColumn() > 0;
 }
 
+function criar_folga_automatica(PDO $pdo, int $funcionarioId, string $data, string $observacao): void {
+    $stmtExiste = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM folgas
+        WHERE funcionario_id = ?
+          AND ? BETWEEN data_inicio AND data_fim
+    ");
+    $stmtExiste->execute([$funcionarioId, $data]);
+
+    if ((int)$stmtExiste->fetchColumn() > 0) {
+        return;
+    }
+
+    $stmtInserir = $pdo->prepare("
+        INSERT INTO folgas (funcionario_id, data_inicio, data_fim, tipo, status, observacoes)
+        VALUES (?, ?, ?, 'folga_compensatoria', 'aprovado', ?)
+    ");
+    $stmtInserir->execute([$funcionarioId, $data, $data, $observacao]);
+}
+
 function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim, array $turnosSelecionados, bool $incluirDomingo, array $funcionariosSelecionados = []): array {
     $inicio = DateTime::createFromFormat('Y-m-d', $dataInicio);
     $fim = DateTime::createFromFormat('Y-m-d', $dataFim);
@@ -46,6 +66,7 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     if (!$funcionarios) {
         throw new Exception('Cadastre funcionarios ativos antes de gerar escalas.');
     }
+    $funcionarioIds = array_map(fn($funcionario) => (int)$funcionario['id'], $funcionarios);
 
     $placeholders = implode(',', array_fill(0, count($turnosSelecionados), '?'));
     $stmtTurnos = $pdo->prepare("SELECT id, nome FROM turnos WHERE id IN ($placeholders) ORDER BY id");
@@ -64,11 +85,29 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     ");
     $stmtExistentes->execute([$dataInicio, $dataFim]);
     $contagem = [];
+    $contagemPorTurno = [];
+    $ordemFuncionarios = [];
     foreach ($funcionarios as $funcionario) {
-        $contagem[(int)$funcionario['id']] = 0;
+        $funcionarioId = (int)$funcionario['id'];
+        $contagem[$funcionarioId] = 0;
+        $contagemPorTurno[$funcionarioId] = [];
+        $ordemFuncionarios[$funcionarioId] = count($ordemFuncionarios);
     }
     foreach ($stmtExistentes->fetchAll(PDO::FETCH_ASSOC) as $linha) {
         $contagem[(int)$linha['funcionario_id']] = (int)$linha['total'];
+    }
+
+    $stmtExistentesPorTurno = $pdo->prepare("
+        SELECT funcionario_id, turno_id, COUNT(*) total
+        FROM escalas
+        WHERE data_escala BETWEEN ? AND ?
+        GROUP BY funcionario_id, turno_id
+    ");
+    $stmtExistentesPorTurno->execute([$dataInicio, $dataFim]);
+    foreach ($stmtExistentesPorTurno->fetchAll(PDO::FETCH_ASSOC) as $linha) {
+        $funcionarioId = (int)$linha['funcionario_id'];
+        $turnoId = (int)$linha['turno_id'];
+        $contagemPorTurno[$funcionarioId][$turnoId] = (int)$linha['total'];
     }
 
     $stmtJaEscalado = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE funcionario_id = ? AND data_escala = ?');
@@ -86,17 +125,22 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     $pdo->beginTransaction();
     try {
         $dataAtual = clone $inicio;
+        $diasProcessados = 0;
 
         while ($dataAtual <= $fim) {
             $dataSql = $dataAtual->format('Y-m-d');
             $diaSemana = (int)$dataAtual->format('w');
 
             if ($diaSemana === 0 && !$incluirDomingo) {
+                foreach ($funcionarioIds as $funcionarioId) {
+                    criar_folga_automatica($pdo, $funcionarioId, $dataSql, 'Folga automatica de domingo');
+                }
                 $dataAtual->modify('+1 day');
                 continue;
             }
 
-            foreach ($turnos as $turno) {
+            $escaladosNoDia = [];
+            foreach ($turnos as $turnoIndice => $turno) {
                 $stmtTurnoJaCoberto->execute([(int)$turno['id'], $dataSql]);
                 if ((int)$stmtTurnoJaCoberto->fetchColumn() > 0) {
                     $ignorados++;
@@ -105,12 +149,31 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
                 }
 
                 $candidatos = $funcionarios;
-                usort($candidatos, function ($a, $b) use ($contagem) {
-                    $totalA = $contagem[(int)$a['id']] ?? 0;
-                    $totalB = $contagem[(int)$b['id']] ?? 0;
+                $turnoIdAtual = (int)$turno['id'];
+                $totalFuncionarios = max(count($funcionarios), 1);
+                $rotacao = ($diasProcessados + $turnoIndice) % $totalFuncionarios;
+                usort($candidatos, function ($a, $b) use ($contagem, $contagemPorTurno, $ordemFuncionarios, $turnoIdAtual, $rotacao, $totalFuncionarios) {
+                    $idA = (int)$a['id'];
+                    $idB = (int)$b['id'];
+                    $totalA = $contagem[$idA] ?? 0;
+                    $totalB = $contagem[$idB] ?? 0;
 
                     if ($totalA === $totalB) {
-                        return strcmp($a['nome'], $b['nome']);
+                        $turnoA = $contagemPorTurno[$idA][$turnoIdAtual] ?? 0;
+                        $turnoB = $contagemPorTurno[$idB][$turnoIdAtual] ?? 0;
+
+                        if ($turnoA === $turnoB) {
+                            $ordemA = (($ordemFuncionarios[$idA] ?? 0) - $rotacao + $totalFuncionarios) % $totalFuncionarios;
+                            $ordemB = (($ordemFuncionarios[$idB] ?? 0) - $rotacao + $totalFuncionarios) % $totalFuncionarios;
+
+                            if ($ordemA === $ordemB) {
+                                return strcmp($a['nome'], $b['nome']);
+                            }
+
+                            return $ordemA <=> $ordemB;
+                        }
+
+                        return $turnoA <=> $turnoB;
                     }
 
                     return $totalA <=> $totalB;
@@ -148,9 +211,18 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
                 ]);
 
                 $contagem[(int)$escalado['id']]++;
+                $contagemPorTurno[(int)$escalado['id']][(int)$turno['id']] = ($contagemPorTurno[(int)$escalado['id']][(int)$turno['id']] ?? 0) + 1;
+                $escaladosNoDia[] = (int)$escalado['id'];
                 $criados++;
             }
 
+            foreach ($funcionarioIds as $funcionarioId) {
+                if (!in_array($funcionarioId, $escaladosNoDia, true)) {
+                    criar_folga_automatica($pdo, $funcionarioId, $dataSql, 'Folga automatica por ausencia de escala no dia');
+                }
+            }
+
+            $diasProcessados++;
             $dataAtual->modify('+1 day');
         }
 
@@ -235,6 +307,28 @@ $escalasMes = $stmtEscalasMes->fetchAll(PDO::FETCH_ASSOC);
 $escalasPorData = [];
 foreach ($escalasMes as $escala) {
     $escalasPorData[$escala['data_escala']][] = $escala;
+}
+
+$stmtFolgasMes = $pdo->prepare('
+    SELECT f.nome funcionario, fo.data_inicio, fo.data_fim, fo.tipo, fo.observacoes
+    FROM folgas fo
+    JOIN funcionarios f ON f.id = fo.funcionario_id
+    WHERE f.ativo = 1
+      AND fo.status = "aprovado"
+      AND fo.data_inicio <= ?
+      AND fo.data_fim >= ?
+    ORDER BY f.nome
+');
+$stmtFolgasMes->execute([$fimMes, $inicioMes]);
+$folgasPorData = [];
+foreach ($stmtFolgasMes->fetchAll(PDO::FETCH_ASSOC) as $folga) {
+    $inicioFolga = new DateTime(max($folga['data_inicio'], $inicioMes));
+    $fimFolga = new DateTime(min($folga['data_fim'], $fimMes));
+
+    while ($inicioFolga <= $fimFolga) {
+        $folgasPorData[$inicioFolga->format('Y-m-d')][] = $folga;
+        $inicioFolga->modify('+1 day');
+    }
 }
 
 $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
@@ -340,6 +434,7 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
                 $dentroDoMes = $numeroDia >= 1 && $numeroDia <= $diasNoMes;
                 $dataCelula = $dentroDoMes ? sprintf('%s-%02d', $mesReferencia, $numeroDia) : '';
                 $itensDia = $dataCelula ? ($escalasPorData[$dataCelula] ?? []) : [];
+                $folgasDia = $dataCelula ? ($folgasPorData[$dataCelula] ?? []) : [];
             ?>
                 <div class="calendar-day <?= $dentroDoMes ? '' : 'muted-day' ?>">
                     <?php if ($dentroDoMes): ?>
@@ -348,6 +443,12 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
                             <div class="shift-pill tipo-<?= h($item['tipo']) ?>">
                                 <span><?= h($item['turno']) ?></span>
                                 <?= h($item['funcionario']) ?>
+                            </div>
+                        <?php endforeach; ?>
+                        <?php foreach ($folgasDia as $folga): ?>
+                            <div class="shift-pill tipo-folga">
+                                <span>Folga</span>
+                                <?= h($folga['funcionario']) ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
