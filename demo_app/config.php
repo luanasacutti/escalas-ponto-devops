@@ -43,7 +43,7 @@ function preparar_dados_demo(PDO $pdo): void {
         $stmt = $pdo->prepare('INSERT INTO turnos (nome, hora_inicio, hora_fim, carga_horaria) VALUES (?, ?, ?, ?)');
         $stmt->execute(['Manha', '08:00:00', '12:00:00', 4]);
         $stmt->execute(['Tarde', '13:00:00', '18:00:00', 5]);
-        $stmt->execute(['Plantao', '18:00:00', '23:00:00', 5]);
+        $stmt->execute(['Noite', '18:00:00', '23:00:00', 5]);
     }
 
     $equipes = (int) $pdo->query('SELECT COUNT(*) FROM equipes')->fetchColumn();

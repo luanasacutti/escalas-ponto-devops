@@ -559,7 +559,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                         <strong><?= $numeroDia ?></strong>
                         <?php foreach ($itensDia as $item): ?>
                             <div class="shift-pill tipo-<?= h($item['tipo']) ?>">
-                                <span><?= h($item['turno']) ?></span>
+                                <span><?= $item['tipo'] === 'remoto' ? 'Home office' : h($item['turno']) ?></span>
                                 <?= h($item['funcionario']) ?>
                             </div>
                         <?php endforeach; ?>
@@ -582,7 +582,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
         <select name="funcionario_id" required><?php foreach ($funcionarios as $f): ?><option value="<?= $f['id'] ?>"><?= h($f['nome']) ?></option><?php endforeach; ?></select>
         <select name="turno_id" required><?php foreach ($turnos as $t): ?><option value="<?= $t['id'] ?>"><?= h($t['nome']) ?></option><?php endforeach; ?></select>
         <input type="date" name="data_escala" required>
-        <select name="tipo"><option>normal</option><option>plantao</option><option>remoto</option></select>
+        <select name="tipo"><option>normal</option><option>remoto</option></select>
         <input name="observacoes" placeholder="Observacoes">
         <button>Cadastrar escala</button>
     </form>
@@ -611,7 +611,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                             <?php endforeach; ?>
                         </select>
                     </td>
-                    <td><select name="tipo"><option <?= $e['tipo'] === 'normal' ? 'selected' : '' ?>>normal</option><option <?= $e['tipo'] === 'plantao' ? 'selected' : '' ?>>plantao</option><option <?= $e['tipo'] === 'remoto' ? 'selected' : '' ?>>remoto</option></select></td>
+                    <td><select name="tipo"><option <?= $e['tipo'] === 'normal' ? 'selected' : '' ?>>normal</option><option <?= $e['tipo'] === 'remoto' ? 'selected' : '' ?>>remoto</option></select></td>
                     <td><input name="observacoes" value="<?= h($e['observacoes'] ?? '') ?>"></td>
                     <td class="table-actions">
                         <button name="acao" value="atualizar_escala">Salvar</button>
