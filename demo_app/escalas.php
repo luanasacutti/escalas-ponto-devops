@@ -410,13 +410,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $somenteLeitura) {
         $mensagem = 'Nao foi possivel processar a escala. ' . $e->getMessage();
     }
 }
-if ($somenteLeitura && $funcionarioLogadoId) {
-    $stmtFuncionariosTela = $pdo->prepare('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 AND id = ? ORDER BY nome');
-    $stmtFuncionariosTela->execute([$funcionarioLogadoId]);
-    $funcionarios = $stmtFuncionariosTela->fetchAll(PDO::FETCH_ASSOC);
-} else {
-    $funcionarios = $pdo->query('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
-}
+$funcionarios = $pdo->query('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
 $turnos = $pdo->query('SELECT id, nome FROM turnos ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
 $mesReferencia = $_GET['mes'] ?? (isset($_POST['data_inicio']) ? substr($_POST['data_inicio'], 0, 7) : date('Y-m'));
 if (!preg_match('/^\d{4}-\d{2}$/', $mesReferencia)) {
@@ -451,14 +445,9 @@ $stmtEscalasMes = $pdo->prepare('
     JOIN turnos t ON t.id = e.turno_id
     WHERE e.data_escala BETWEEN ? AND ?
       AND f.ativo = 1
-      ' . ($somenteLeitura && $funcionarioLogadoId ? 'AND f.id = ?' : '') . '
     ORDER BY e.data_escala, t.hora_inicio, f.nome
 ');
-$paramsEscalasMes = [$inicioMes, $fimMes];
-if ($somenteLeitura && $funcionarioLogadoId) {
-    $paramsEscalasMes[] = $funcionarioLogadoId;
-}
-$stmtEscalasMes->execute($paramsEscalasMes);
+$stmtEscalasMes->execute([$inicioMes, $fimMes]);
 $escalasMes = $stmtEscalasMes->fetchAll(PDO::FETCH_ASSOC);
 $escalasPorData = [];
 foreach ($escalasMes as $escala) {
