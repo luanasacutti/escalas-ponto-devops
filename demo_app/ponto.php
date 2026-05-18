@@ -48,8 +48,12 @@ foreach ($funcionarios as $funcionario) {
     }
 }
 
-$inicioSemana = new DateTime('monday this week');
+$dataReferenciaTexto = $_GET['data'] ?? date('Y-m-d');
+$dataReferencia = DateTime::createFromFormat('Y-m-d', $dataReferenciaTexto) ?: new DateTime();
+$inicioSemana = (clone $dataReferencia)->modify('monday this week');
 $fimSemana = (clone $inicioSemana)->modify('+6 days');
+$semanaAnterior = (clone $inicioSemana)->modify('-7 days')->format('Y-m-d');
+$proximaSemana = (clone $inicioSemana)->modify('+7 days')->format('Y-m-d');
 $stmtSemana = $pdo->prepare('
     SELECT data_ponto, entrada, inicio_intervalo, fim_intervalo, saida, horas_trabalhadas, status
     FROM registros_ponto
@@ -73,7 +77,7 @@ $diasSemana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
         <span>Pontos / Jornada semanal</span>
         <h1>Super Punch</h1>
     </div>
-    <a class="btn" href="relatorios.php">Folha de Frequencia</a>
+    <a class="btn" href="relatorios.php?mes=<?= h($dataReferencia->format('Y-m')) ?>&funcionario_id=<?= $funcionarioId ?>">Folha de Frequencia</a>
 </div>
 
 <?php if ($mensagem): ?>
@@ -85,15 +89,24 @@ $diasSemana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
         <div class="punch-filters">
             <label>
                 <span>Colaborador</span>
-                <select onchange="location.href='ponto.php?funcionario_id=' + this.value">
+                <select onchange="location.href='ponto.php?funcionario_id=' + this.value + '&data=<?= h($dataReferencia->format('Y-m-d')) ?>'">
                     <?php foreach ($funcionarios as $f): ?>
                         <option value="<?= $f['id'] ?>" <?= $funcionarioId === (int)$f['id'] ? 'selected' : '' ?>><?= h($f['nome']) ?></option>
                     <?php endforeach; ?>
                 </select>
             </label>
-            <div class="week-range">
-                <?= h($inicioSemana->format('d/m/Y')) ?> - <?= h($fimSemana->format('d/m/Y')) ?>
-            </div>
+            <form method="get" class="date-jump-form">
+                <input type="hidden" name="funcionario_id" value="<?= $funcionarioId ?>">
+                <a class="btn ghost" href="ponto.php?funcionario_id=<?= $funcionarioId ?>&data=<?= h($semanaAnterior) ?>">Semana anterior</a>
+                <label>
+                    <span>Escolher data</span>
+                    <input type="date" name="data" value="<?= h($dataReferencia->format('Y-m-d')) ?>" onchange="this.form.submit()">
+                </label>
+                <a class="btn ghost" href="ponto.php?funcionario_id=<?= $funcionarioId ?>&data=<?= h($proximaSemana) ?>">Proxima semana</a>
+                <div class="week-range">
+                    <?= h($inicioSemana->format('d/m/Y')) ?> - <?= h($fimSemana->format('d/m/Y')) ?>
+                </div>
+            </form>
         </div>
 
         <table class="punch-table">
