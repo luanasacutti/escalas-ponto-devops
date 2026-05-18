@@ -15,7 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'id' => $usuario['id'],
             'nome' => $usuario['nome'],
             'email' => $usuario['email'],
-            'tipo' => $usuario['tipo_usuario']
+            'tipo' => $usuario['tipo_usuario'],
+            'funcionario_id' => $usuario['funcionario_id'] ?? null
         ];
         header('Location: dashboard.php');
         exit;
@@ -51,7 +52,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <button type="submit">Entrar</button>
         </form>
 
-        <small>Demo: admin@devops.com / 123456</small>
+        <small>Admin: admin@devops.com / 123456</small>
+        <small>Funcionarios: use o email cadastrado / 123456</small>
     </main>
 </body>
 </html>

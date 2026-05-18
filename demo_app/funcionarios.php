@@ -1,5 +1,7 @@
 <?php
 $titulo = 'Funcionarios';
+require_once 'config.php';
+exigir_admin();
 require_once 'header.php';
 $pdo = db();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

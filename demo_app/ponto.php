@@ -5,6 +5,11 @@ $pdo = db();
 $mensagem = '';
 $funcionarioId = (int)($_POST['funcionario_id'] ?? $_GET['funcionario_id'] ?? 1);
 $acao = $_POST['acao'] ?? '';
+$funcionarioLogadoId = usuario_funcionario_id();
+
+if (!usuario_admin() && $funcionarioLogadoId) {
+    $funcionarioId = $funcionarioLogadoId;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $acao) {
     $hoje = data_hoje_sql();
@@ -91,14 +96,21 @@ $diasSemana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
 <section class="punch-workspace">
     <div class="punch-main panel">
         <div class="punch-filters">
-            <label>
-                <span>Colaborador</span>
-                <select onchange="location.href='ponto.php?funcionario_id=' + this.value + '&data=<?= h($dataReferencia->format('Y-m-d')) ?>'">
-                    <?php foreach ($funcionarios as $f): ?>
-                        <option value="<?= $f['id'] ?>" <?= $funcionarioId === (int)$f['id'] ? 'selected' : '' ?>><?= h($f['nome']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </label>
+            <?php if (usuario_admin()): ?>
+                <label>
+                    <span>Colaborador</span>
+                    <select onchange="location.href='ponto.php?funcionario_id=' + this.value + '&data=<?= h($dataReferencia->format('Y-m-d')) ?>'">
+                        <?php foreach ($funcionarios as $f): ?>
+                            <option value="<?= $f['id'] ?>" <?= $funcionarioId === (int)$f['id'] ? 'selected' : '' ?>><?= h($f['nome']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            <?php else: ?>
+                <div class="readonly-filter">
+                    <span>Colaborador</span>
+                    <strong><?= h($funcionarioAtual['nome'] ?? 'Funcionario') ?></strong>
+                </div>
+            <?php endif; ?>
             <form method="get" class="date-jump-form">
                 <input type="hidden" name="funcionario_id" value="<?= $funcionarioId ?>">
                 <a class="btn ghost" href="ponto.php?funcionario_id=<?= $funcionarioId ?>&data=<?= h($semanaAnterior) ?>">Semana anterior</a>

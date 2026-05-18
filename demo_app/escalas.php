@@ -4,6 +4,8 @@ require_once 'header.php';
 $pdo = db();
 $mensagem = '';
 $detalhesGeracao = [];
+$somenteLeitura = !usuario_admin();
+$funcionarioLogadoId = usuario_funcionario_id();
 
 function buscar_equipe_padrao(PDO $pdo): ?int {
     $equipeId = $pdo->query('SELECT id FROM equipes ORDER BY id LIMIT 1')->fetchColumn();
@@ -341,7 +343,9 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     ];
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $somenteLeitura) {
+    $mensagem = 'Seu usuario pode consultar a propria escala, mas alteracoes ficam com a administracao.';
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $acao = $_POST['acao'] ?? '';
 
@@ -406,7 +410,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $mensagem = 'Nao foi possivel processar a escala. ' . $e->getMessage();
     }
 }
-$funcionarios = $pdo->query('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
+if ($somenteLeitura && $funcionarioLogadoId) {
+    $stmtFuncionariosTela = $pdo->prepare('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 AND id = ? ORDER BY nome');
+    $stmtFuncionariosTela->execute([$funcionarioLogadoId]);
+    $funcionarios = $stmtFuncionariosTela->fetchAll(PDO::FETCH_ASSOC);
+} else {
+    $funcionarios = $pdo->query('SELECT id, nome, cargo FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
+}
 $turnos = $pdo->query('SELECT id, nome FROM turnos ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
 $mesReferencia = $_GET['mes'] ?? (isset($_POST['data_inicio']) ? substr($_POST['data_inicio'], 0, 7) : date('Y-m'));
 if (!preg_match('/^\d{4}-\d{2}$/', $mesReferencia)) {
@@ -441,16 +451,24 @@ $stmtEscalasMes = $pdo->prepare('
     JOIN turnos t ON t.id = e.turno_id
     WHERE e.data_escala BETWEEN ? AND ?
       AND f.ativo = 1
+      ' . ($somenteLeitura && $funcionarioLogadoId ? 'AND f.id = ?' : '') . '
     ORDER BY e.data_escala, t.hora_inicio, f.nome
 ');
-$stmtEscalasMes->execute([$inicioMes, $fimMes]);
+$paramsEscalasMes = [$inicioMes, $fimMes];
+if ($somenteLeitura && $funcionarioLogadoId) {
+    $paramsEscalasMes[] = $funcionarioLogadoId;
+}
+$stmtEscalasMes->execute($paramsEscalasMes);
 $escalasMes = $stmtEscalasMes->fetchAll(PDO::FETCH_ASSOC);
 $escalasPorData = [];
 foreach ($escalasMes as $escala) {
     $escalasPorData[$escala['data_escala']][] = $escala;
 }
 
-$escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
+$escalas = [];
+if (!$somenteLeitura) {
+    $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
+}
 ?>
 <div class="schedule-hero">
     <div>
@@ -468,9 +486,10 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
     </div>
 <?php endif; ?>
 
-<form method="post" class="schedule-workspace">
+<form method="post" class="schedule-workspace <?= $somenteLeitura ? 'schedule-readonly' : '' ?>">
     <input type="hidden" name="acao" value="gerar_automatico">
 
+    <?php if (!$somenteLeitura): ?>
     <aside class="employee-panel">
         <div class="employee-panel-header">
             <h2>Escala de Trabalho</h2>
@@ -496,8 +515,10 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
             <?php endforeach; ?>
         </div>
     </aside>
+    <?php endif; ?>
 
     <section class="calendar-panel">
+        <?php if (!$somenteLeitura): ?>
         <div class="movement-tabs">
             <button type="button" class="tab ativo">Movimentacao de turno</button>
             <button type="button" class="tab">Sobreaviso</button>
@@ -523,6 +544,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
             <button type="button" class="btn ghost">Simular</button>
             <button class="btn apply">Gerar mes</button>
         </div>
+        <?php endif; ?>
 
         <div class="calendar-toolbar">
             <div>
@@ -570,6 +592,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
     </section>
 </form>
 
+<?php if (!$somenteLeitura): ?>
 <section class="panel">
     <h2>Ajustes manuais</h2>
     <p class="muted-text">Use esta area para corrigir imprevistos depois que a escala mensal for gerada.</p>
@@ -622,4 +645,5 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
         <?php endforeach; ?>
     </table>
 </section>
+<?php endif; ?>
 <?php require_once 'footer.php'; ?>

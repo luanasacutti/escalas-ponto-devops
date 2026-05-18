@@ -4,7 +4,7 @@ Sistema escolar para gerenciamento de escalas de trabalho e relogio de ponto, de
 
 ## Funcionalidades
 
-- Login de administrador
+- Login de administrador e funcionarios
 - Dashboard com resumo do sistema
 - Cadastro e listagem de funcionarios
 - Geracao automatica de escalas
@@ -12,6 +12,7 @@ Sistema escolar para gerenciamento de escalas de trabalho e relogio de ponto, de
 - Registro de ponto com entrada, intervalo e saida
 - Tela Super Punch com jornada semanal
 - Relatorios de horas registradas
+- Permissoes por perfil: admin gerencia tudo, funcionario consulta a propria escala e registra o proprio ponto
 
 ## Tecnologias
 
@@ -58,7 +59,14 @@ Se tudo estiver correto, a tela de login sera exibida.
 ## Login de teste
 
 ```txt
+Admin:
 Email: admin@devops.com
+Senha: 123456
+
+Funcionarios:
+Email: maria.eduarda@devops.com
+Email: luana.sacutti@devops.com
+Email: guilherme.almeida@devops.com
 Senha: 123456
 ```
 

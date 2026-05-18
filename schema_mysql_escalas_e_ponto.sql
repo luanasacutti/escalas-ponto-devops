@@ -15,6 +15,7 @@ CREATE TABLE usuarios (
     nome VARCHAR(150) NOT NULL,
     email VARCHAR(150) NOT NULL UNIQUE,
     senha VARCHAR(255) NOT NULL,
+    funcionario_id INT,
     tipo_usuario ENUM('admin', 'gestor', 'funcionario') NOT NULL DEFAULT 'funcionario',
     ativo BOOLEAN NOT NULL DEFAULT TRUE,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -29,6 +30,11 @@ CREATE TABLE funcionarios (
     ativo BOOLEAN NOT NULL DEFAULT TRUE,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE usuarios
+    ADD CONSTRAINT fk_usuario_funcionario
+    FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
 
 CREATE TABLE equipes (
     id INT AUTO_INCREMENT PRIMARY KEY,

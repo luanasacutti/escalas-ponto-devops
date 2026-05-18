@@ -9,10 +9,19 @@ if (!preg_match('/^\d{4}-\d{2}$/', $mes)) {
 }
 
 $funcionarioId = (int)($_GET['funcionario_id'] ?? 0);
+if (!usuario_admin() && usuario_funcionario_id()) {
+    $funcionarioId = usuario_funcionario_id();
+}
 $inicioMes = $mes . '-01';
 $fimMes = date('Y-m-t', strtotime($inicioMes));
 
-$funcionarios = $pdo->query('SELECT id, nome FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
+if (!usuario_admin() && usuario_funcionario_id()) {
+    $stmtFuncionarios = $pdo->prepare('SELECT id, nome FROM funcionarios WHERE ativo = 1 AND id = ? ORDER BY nome');
+    $stmtFuncionarios->execute([usuario_funcionario_id()]);
+    $funcionarios = $stmtFuncionarios->fetchAll(PDO::FETCH_ASSOC);
+} else {
+    $funcionarios = $pdo->query('SELECT id, nome FROM funcionarios WHERE ativo = 1 ORDER BY nome')->fetchAll(PDO::FETCH_ASSOC);
+}
 
 $params = [$inicioMes, $fimMes];
 $filtroFuncionario = '';
@@ -94,15 +103,19 @@ require_once 'header.php';
             <span>Mes</span>
             <input type="month" name="mes" value="<?= h($mes) ?>">
         </label>
-        <label>
-            <span>Funcionario</span>
-            <select name="funcionario_id">
-                <option value="0">Todos</option>
-                <?php foreach ($funcionarios as $funcionario): ?>
-                    <option value="<?= $funcionario['id'] ?>" <?= $funcionarioId === (int)$funcionario['id'] ? 'selected' : '' ?>><?= h($funcionario['nome']) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </label>
+        <?php if (usuario_admin()): ?>
+            <label>
+                <span>Funcionario</span>
+                <select name="funcionario_id">
+                    <option value="0">Todos</option>
+                    <?php foreach ($funcionarios as $funcionario): ?>
+                        <option value="<?= $funcionario['id'] ?>" <?= $funcionarioId === (int)$funcionario['id'] ? 'selected' : '' ?>><?= h($funcionario['nome']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+        <?php else: ?>
+            <input type="hidden" name="funcionario_id" value="<?= h((string)$funcionarioId) ?>">
+        <?php endif; ?>
         <button>Gerar relatorio</button>
         <a class="btn secundario" href="relatorios.php?mes=<?= h($mes) ?>&funcionario_id=<?= $funcionarioId ?>&export=csv">Exportar CSV</a>
     </form>

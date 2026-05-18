@@ -19,11 +19,13 @@ function db(): PDO {
 }
 
 function preparar_dados_demo(PDO $pdo): void {
+    garantir_coluna_funcionario_usuario($pdo);
+
     $total = (int) $pdo->query('SELECT COUNT(*) FROM usuarios')->fetchColumn();
     if ($total === 0) {
         $senha = password_hash('123456', PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare('INSERT INTO usuarios (nome, email, senha, tipo_usuario) VALUES (?, ?, ?, ?)');
-        $stmt->execute(['Luana Admin', 'admin@devops.com', $senha, 'admin']);
+        $stmt = $pdo->prepare('INSERT INTO usuarios (nome, email, senha, tipo_usuario, funcionario_id) VALUES (?, ?, ?, ?, ?)');
+        $stmt->execute(['Luana Admin', 'admin@devops.com', $senha, 'admin', null]);
     }
 
     $funcionarios = (int) $pdo->query('SELECT COUNT(*) FROM funcionarios')->fetchColumn();
@@ -51,6 +53,48 @@ function preparar_dados_demo(PDO $pdo): void {
     if ($equipes === 0) {
         $pdo->exec("INSERT INTO equipes (nome, descricao, lider_id) VALUES ('Plataforma', 'Equipe responsavel por infraestrutura e automacao', 1)");
     }
+
+    criar_usuarios_funcionarios($pdo);
+}
+
+function garantir_coluna_funcionario_usuario(PDO $pdo): void {
+    $stmt = $pdo->query("
+        SELECT COUNT(*)
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'usuarios'
+          AND COLUMN_NAME = 'funcionario_id'
+    ");
+
+    if ((int)$stmt->fetchColumn() === 0) {
+        $pdo->exec('ALTER TABLE usuarios ADD COLUMN funcionario_id INT NULL AFTER senha');
+        $pdo->exec('ALTER TABLE usuarios ADD CONSTRAINT fk_usuario_funcionario FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id) ON DELETE SET NULL ON UPDATE CASCADE');
+    }
+}
+
+function criar_usuarios_funcionarios(PDO $pdo): void {
+    $senha = password_hash('123456', PASSWORD_DEFAULT);
+    $funcionarios = $pdo->query('SELECT id, nome, email FROM funcionarios WHERE ativo = 1')->fetchAll(PDO::FETCH_ASSOC);
+    $stmtUsuario = $pdo->prepare('SELECT id, tipo_usuario FROM usuarios WHERE email = ? LIMIT 1');
+    $stmtInserir = $pdo->prepare('INSERT INTO usuarios (nome, email, senha, tipo_usuario, funcionario_id) VALUES (?, ?, ?, "funcionario", ?)');
+    $stmtAtualizar = $pdo->prepare('UPDATE usuarios SET funcionario_id = ?, tipo_usuario = "funcionario" WHERE id = ? AND tipo_usuario <> "admin"');
+
+    foreach ($funcionarios as $funcionario) {
+        $stmtUsuario->execute([$funcionario['email']]);
+        $usuario = $stmtUsuario->fetch(PDO::FETCH_ASSOC);
+
+        if ($usuario) {
+            $stmtAtualizar->execute([(int)$funcionario['id'], (int)$usuario['id']]);
+            continue;
+        }
+
+        $stmtInserir->execute([
+            $funcionario['nome'],
+            $funcionario['email'],
+            $senha,
+            (int)$funcionario['id']
+        ]);
+    }
 }
 
 function usuario_logado(): bool {
@@ -60,6 +104,24 @@ function usuario_logado(): bool {
 function exigir_login(): void {
     if (!usuario_logado()) {
         header('Location: index.php');
+        exit;
+    }
+}
+
+function usuario_admin(): bool {
+    return ($_SESSION['usuario']['tipo'] ?? '') === 'admin';
+}
+
+function usuario_funcionario_id(): ?int {
+    $funcionarioId = $_SESSION['usuario']['funcionario_id'] ?? null;
+    return $funcionarioId ? (int)$funcionarioId : null;
+}
+
+function exigir_admin(): void {
+    exigir_login();
+
+    if (!usuario_admin()) {
+        header('Location: ponto.php');
         exit;
     }
 }
