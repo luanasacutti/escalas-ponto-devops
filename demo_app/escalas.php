@@ -227,6 +227,7 @@ $stmtEscalasMes = $pdo->prepare('
     JOIN funcionarios f ON f.id = e.funcionario_id
     JOIN turnos t ON t.id = e.turno_id
     WHERE e.data_escala BETWEEN ? AND ?
+      AND f.ativo = 1
     ORDER BY e.data_escala, t.hora_inicio, f.nome
 ');
 $stmtEscalasMes->execute([$inicioMes, $fimMes]);
@@ -236,7 +237,7 @@ foreach ($escalasMes as $escala) {
     $escalasPorData[$escala['data_escala']][] = $escala;
 }
 
-$escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
+$escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <div class="schedule-hero">
     <div>
