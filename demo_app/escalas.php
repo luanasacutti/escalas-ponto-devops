@@ -42,6 +42,62 @@ function criar_folga_automatica(PDO $pdo, int $funcionarioId, string $data, stri
     $stmtInserir->execute([$funcionarioId, $data, $data, $observacao]);
 }
 
+function funcionario_tem_escala_no_dia(PDO $pdo, int $funcionarioId, string $data, ?int $ignorarEscalaId = null): bool {
+    if ($ignorarEscalaId) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE funcionario_id = ? AND data_escala = ? AND id <> ?');
+        $stmt->execute([$funcionarioId, $data, $ignorarEscalaId]);
+    } else {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE funcionario_id = ? AND data_escala = ?');
+        $stmt->execute([$funcionarioId, $data]);
+    }
+
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function turno_tem_escala_no_dia(PDO $pdo, int $turnoId, string $data, ?int $ignorarEscalaId = null): bool {
+    if ($ignorarEscalaId) {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE turno_id = ? AND data_escala = ? AND id <> ?');
+        $stmt->execute([$turnoId, $data, $ignorarEscalaId]);
+    } else {
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE turno_id = ? AND data_escala = ?');
+        $stmt->execute([$turnoId, $data]);
+    }
+
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function registrar_folga_manual(PDO $pdo, int $funcionarioId, string $dataInicio, string $dataFim, string $tipo, string $observacoes): int {
+    $inicio = DateTime::createFromFormat('Y-m-d', $dataInicio);
+    $fim = DateTime::createFromFormat('Y-m-d', $dataFim);
+
+    if (!$inicio || !$fim || $inicio > $fim) {
+        throw new Exception('Informe um periodo valido para a folga.');
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $stmtFolga = $pdo->prepare('
+            INSERT INTO folgas (funcionario_id, data_inicio, data_fim, tipo, status, observacoes)
+            VALUES (?, ?, ?, ?, "aprovado", ?)
+        ');
+        $stmtFolga->execute([$funcionarioId, $dataInicio, $dataFim, $tipo, $observacoes]);
+
+        $stmtRemoverEscalas = $pdo->prepare('
+            DELETE FROM escalas
+            WHERE funcionario_id = ?
+              AND data_escala BETWEEN ? AND ?
+        ');
+        $stmtRemoverEscalas->execute([$funcionarioId, $dataInicio, $dataFim]);
+        $removidas = $stmtRemoverEscalas->rowCount();
+
+        $pdo->commit();
+        return $removidas;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
 function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim, array $turnosSelecionados, bool $incluirDomingo, array $funcionariosSelecionados = []): array {
     $inicio = DateTime::createFromFormat('Y-m-d', $dataInicio);
     $fim = DateTime::createFromFormat('Y-m-d', $dataFim);
@@ -241,7 +297,9 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        if (($_POST['acao'] ?? '') === 'gerar_automatico') {
+        $acao = $_POST['acao'] ?? '';
+
+        if ($acao === 'gerar_automatico') {
             $resultado = gerar_escalas_automaticas(
                 $pdo,
                 $_POST['data_inicio'] ?? '',
@@ -256,10 +314,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mensagem .= " {$resultado['ignorados']} turno(s) ficaram sem funcionario disponivel.";
                 $detalhesGeracao = $resultado['detalhes'];
             }
-        } else {
+        } elseif ($acao === 'manual') {
+            $funcionarioId = (int)($_POST['funcionario_id'] ?? 0);
+            $turnoId = (int)($_POST['turno_id'] ?? 0);
+            $dataEscala = $_POST['data_escala'] ?? '';
+
+            if (funcionario_tem_folga($pdo, $funcionarioId, $dataEscala)) {
+                throw new Exception('Este funcionario esta de folga ou ferias nesta data.');
+            }
+
+            if (funcionario_tem_escala_no_dia($pdo, $funcionarioId, $dataEscala)) {
+                throw new Exception('Este funcionario ja possui escala nesta data.');
+            }
+
+            if (turno_tem_escala_no_dia($pdo, $turnoId, $dataEscala)) {
+                throw new Exception('Este turno ja possui funcionario nesta data.');
+            }
+
             $stmt = $pdo->prepare('INSERT INTO escalas (funcionario_id, equipe_id, turno_id, data_escala, tipo, observacoes) VALUES (?, ?, ?, ?, ?, ?)');
-            $stmt->execute([$_POST['funcionario_id'], buscar_equipe_padrao($pdo), $_POST['turno_id'], $_POST['data_escala'], $_POST['tipo'], $_POST['observacoes']]);
+            $stmt->execute([$funcionarioId, buscar_equipe_padrao($pdo), $turnoId, $dataEscala, $_POST['tipo'], $_POST['observacoes']]);
             $mensagem = 'Escala cadastrada.';
+        } elseif ($acao === 'atualizar_escala') {
+            $escalaId = (int)($_POST['escala_id'] ?? 0);
+            $funcionarioId = (int)($_POST['funcionario_id'] ?? 0);
+            $turnoId = (int)($_POST['turno_id'] ?? 0);
+            $dataEscala = $_POST['data_escala'] ?? '';
+
+            if (funcionario_tem_folga($pdo, $funcionarioId, $dataEscala)) {
+                throw new Exception('Este funcionario esta de folga ou ferias nesta data.');
+            }
+
+            if (funcionario_tem_escala_no_dia($pdo, $funcionarioId, $dataEscala, $escalaId)) {
+                throw new Exception('Este funcionario ja possui outra escala nesta data.');
+            }
+
+            if (turno_tem_escala_no_dia($pdo, $turnoId, $dataEscala, $escalaId)) {
+                throw new Exception('Este turno ja esta ocupado nesta data.');
+            }
+
+            $stmt = $pdo->prepare('
+                UPDATE escalas
+                SET funcionario_id = ?, equipe_id = ?, turno_id = ?, data_escala = ?, tipo = ?, observacoes = ?
+                WHERE id = ?
+            ');
+            $stmt->execute([$funcionarioId, buscar_equipe_padrao($pdo), $turnoId, $dataEscala, $_POST['tipo'], $_POST['observacoes'], $escalaId]);
+            $mensagem = 'Escala atualizada manualmente.';
+        } elseif ($acao === 'excluir_escala') {
+            $stmt = $pdo->prepare('DELETE FROM escalas WHERE id = ?');
+            $stmt->execute([(int)($_POST['escala_id'] ?? 0)]);
+            $mensagem = 'Escala removida.';
+        } elseif ($acao === 'registrar_folga') {
+            $removidas = registrar_folga_manual(
+                $pdo,
+                (int)($_POST['funcionario_id'] ?? 0),
+                $_POST['data_inicio_folga'] ?? '',
+                $_POST['data_fim_folga'] ?? '',
+                $_POST['tipo_folga'] ?? 'folga_compensatoria',
+                $_POST['observacoes'] ?? 'Folga registrada manualmente'
+            );
+            $mensagem = "Folga/ferias registrada. {$removidas} escala(s) removida(s) do periodo.";
         }
     } catch (Exception $e) {
         $mensagem = 'Nao foi possivel processar a escala. ' . $e->getMessage();
@@ -294,7 +407,7 @@ $nomesMeses = [
 $tituloMes = $nomesMeses[(int)$primeiroDia->format('n')] . ' ' . $primeiroDia->format('Y');
 
 $stmtEscalasMes = $pdo->prepare('
-    SELECT e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes
+    SELECT e.id, e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes
     FROM escalas e
     JOIN funcionarios f ON f.id = e.funcionario_id
     JOIN turnos t ON t.id = e.turno_id
@@ -331,7 +444,7 @@ foreach ($stmtFolgasMes->fetchAll(PDO::FETCH_ASSOC) as $folga) {
     }
 }
 
-$escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
+$escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <div class="schedule-hero">
     <div>
@@ -386,7 +499,7 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
 
         <div class="movement-bar">
             <label>
-                <span>Movimentar selecionados para o turno</span>
+                <span>Gerar escala mensal para os turnos</span>
                 <select name="turnos[]" multiple required size="3">
                     <?php foreach ($turnos as $t): ?>
                         <option value="<?= $t['id'] ?>" selected><?= h($t['nome']) ?></option>
@@ -402,7 +515,7 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
                 <input type="date" name="data_fim" value="<?= h($fimMes) ?>" required>
             </label>
             <button type="button" class="btn ghost">Simular</button>
-            <button class="btn apply">Aplicar</button>
+            <button class="btn apply">Gerar mes</button>
         </div>
 
         <div class="calendar-toolbar">
@@ -459,7 +572,12 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
 </form>
 
 <section class="panel">
-    <h2>Nova escala</h2>
+    <h2>Ajustes manuais</h2>
+    <p class="muted-text">Use esta area para corrigir imprevistos depois que a escala mensal for gerada.</p>
+</section>
+
+<section class="panel">
+    <h2>Nova escala manual</h2>
     <form method="post" class="grid-form">
         <input type="hidden" name="acao" value="manual">
         <select name="funcionario_id" required><?php foreach ($funcionarios as $f): ?><option value="<?= $f['id'] ?>"><?= h($f['nome']) ?></option><?php endforeach; ?></select>
@@ -470,12 +588,56 @@ $escalas = $pdo->query('SELECT e.data_escala, f.nome funcionario, t.nome turno, 
         <button>Cadastrar escala</button>
     </form>
 </section>
+
 <section class="panel">
-    <h2>Ultimas escalas cadastradas</h2>
+    <h2>Registrar ferias ou folga</h2>
+    <form method="post" class="grid-form vacation-form">
+        <input type="hidden" name="acao" value="registrar_folga">
+        <select name="funcionario_id" required><?php foreach ($funcionarios as $f): ?><option value="<?= $f['id'] ?>"><?= h($f['nome']) ?></option><?php endforeach; ?></select>
+        <input type="date" name="data_inicio_folga" required>
+        <input type="date" name="data_fim_folga" required>
+        <select name="tipo_folga" required>
+            <option value="ferias">Ferias</option>
+            <option value="folga_compensatoria">Folga compensatoria</option>
+            <option value="licenca">Licenca</option>
+            <option value="atestado">Atestado</option>
+        </select>
+        <input name="observacoes" placeholder="Motivo ou observacoes">
+        <button>Registrar e liberar periodo</button>
+    </form>
+</section>
+
+<section class="panel">
+    <h2>Alterar escalas cadastradas</h2>
     <table>
-        <tr><th>Data</th><th>Funcionario</th><th>Turno</th><th>Tipo</th><th>Obs.</th></tr>
+        <tr><th>Data</th><th>Funcionario</th><th>Turno</th><th>Tipo</th><th>Obs.</th><th>Acoes</th></tr>
         <?php foreach ($escalas as $e): ?>
-            <tr><td><?= h($e['data_escala']) ?></td><td><?= h($e['funcionario']) ?></td><td><?= h($e['turno']) ?></td><td><?= h($e['tipo']) ?></td><td><?= h($e['observacoes'] ?? '-') ?></td></tr>
+            <tr>
+                <form method="post">
+                    <input type="hidden" name="escala_id" value="<?= (int)$e['id'] ?>">
+                    <td><input type="date" name="data_escala" value="<?= h($e['data_escala']) ?>" required></td>
+                    <td>
+                        <select name="funcionario_id" required>
+                            <?php foreach ($funcionarios as $f): ?>
+                                <option value="<?= $f['id'] ?>" <?= (int)$f['id'] === (int)$e['funcionario_id'] ? 'selected' : '' ?>><?= h($f['nome']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                    <td>
+                        <select name="turno_id" required>
+                            <?php foreach ($turnos as $t): ?>
+                                <option value="<?= $t['id'] ?>" <?= (int)$t['id'] === (int)$e['turno_id'] ? 'selected' : '' ?>><?= h($t['nome']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                    <td><select name="tipo"><option <?= $e['tipo'] === 'normal' ? 'selected' : '' ?>>normal</option><option <?= $e['tipo'] === 'plantao' ? 'selected' : '' ?>>plantao</option><option <?= $e['tipo'] === 'remoto' ? 'selected' : '' ?>>remoto</option><option <?= $e['tipo'] === 'folga' ? 'selected' : '' ?>>folga</option></select></td>
+                    <td><input name="observacoes" value="<?= h($e['observacoes'] ?? '') ?>"></td>
+                    <td class="table-actions">
+                        <button name="acao" value="atualizar_escala">Salvar</button>
+                        <button name="acao" value="excluir_escala" class="danger-btn">Excluir</button>
+                    </td>
+                </form>
+            </tr>
         <?php endforeach; ?>
     </table>
 </section>
