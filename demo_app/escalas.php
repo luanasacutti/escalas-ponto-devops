@@ -42,6 +42,50 @@ function criar_folga_automatica(PDO $pdo, int $funcionarioId, string $data, stri
     $stmtInserir->execute([$funcionarioId, $data, $data, $observacao]);
 }
 
+function escolher_datas_distribuidas(array $datas, int $quantidade, int $deslocamento = 0): array {
+    $datas = array_values(array_unique($datas));
+    $total = count($datas);
+
+    if ($total <= $quantidade) {
+        return $datas;
+    }
+
+    if ($deslocamento > 0) {
+        $deslocamento = $deslocamento % $total;
+        $datas = array_merge(array_slice($datas, $deslocamento), array_slice($datas, 0, $deslocamento));
+    }
+
+    $selecionadas = [];
+    for ($i = 1; $i <= $quantidade; $i++) {
+        $indice = (int)round(($i * ($total + 1)) / ($quantidade + 1)) - 1;
+        $indice = max(0, min($total - 1, $indice));
+        $selecionadas[] = $datas[$indice];
+    }
+
+    return array_values(array_unique($selecionadas));
+}
+
+function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int $quantidade, int $deslocamento = 0): int {
+    if (!$escalasFuncionario) {
+        return 0;
+    }
+
+    $selecionadas = escolher_datas_distribuidas(array_keys($escalasFuncionario), $quantidade, $deslocamento);
+    $stmt = $pdo->prepare("
+        UPDATE escalas
+        SET tipo = 'remoto', observacoes = 'Home office automatico'
+        WHERE id = ?
+    ");
+
+    $atualizadas = 0;
+    foreach ($selecionadas as $data) {
+        $stmt->execute([(int)$escalasFuncionario[$data]]);
+        $atualizadas += $stmt->rowCount();
+    }
+
+    return $atualizadas;
+}
+
 function funcionario_tem_escala_no_dia(PDO $pdo, int $funcionarioId, string $data, ?int $ignorarEscalaId = null): bool {
     if ($ignorarEscalaId) {
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM escalas WHERE funcionario_id = ? AND data_escala = ? AND id <> ?');
@@ -123,6 +167,10 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
         throw new Exception('Cadastre funcionarios ativos antes de gerar escalas.');
     }
     $funcionarioIds = array_map(fn($funcionario) => (int)$funcionario['id'], $funcionarios);
+    $indiceFuncionario = [];
+    foreach ($funcionarioIds as $indice => $funcionarioId) {
+        $indiceFuncionario[$funcionarioId] = $indice;
+    }
 
     $placeholders = implode(',', array_fill(0, count($turnosSelecionados), '?'));
     $stmtTurnos = $pdo->prepare("SELECT id, nome FROM turnos WHERE id IN ($placeholders) ORDER BY id");
@@ -177,6 +225,14 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     $criados = 0;
     $ignorados = 0;
     $detalhes = [];
+    $diasPeriodo = [];
+    $diasDomingo = [];
+    $datasEscaladasPorFuncionario = [];
+    $escalasCriadasPorFuncionario = [];
+    foreach ($funcionarioIds as $funcionarioId) {
+        $datasEscaladasPorFuncionario[$funcionarioId] = [];
+        $escalasCriadasPorFuncionario[$funcionarioId] = [];
+    }
 
     $pdo->beginTransaction();
     try {
@@ -186,11 +242,12 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
         while ($dataAtual <= $fim) {
             $dataSql = $dataAtual->format('Y-m-d');
             $diaSemana = (int)$dataAtual->format('w');
+            $diasPeriodo[] = $dataSql;
+            if ($diaSemana === 0) {
+                $diasDomingo[] = $dataSql;
+            }
 
             if ($diaSemana === 0 && !$incluirDomingo) {
-                foreach ($funcionarioIds as $funcionarioId) {
-                    criar_folga_automatica($pdo, $funcionarioId, $dataSql, 'Folga automatica de domingo');
-                }
                 $dataAtual->modify('+1 day');
                 continue;
             }
@@ -269,17 +326,31 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
                 $contagem[(int)$escalado['id']]++;
                 $contagemPorTurno[(int)$escalado['id']][(int)$turno['id']] = ($contagemPorTurno[(int)$escalado['id']][(int)$turno['id']] ?? 0) + 1;
                 $escaladosNoDia[] = (int)$escalado['id'];
+                $datasEscaladasPorFuncionario[(int)$escalado['id']][] = $dataSql;
+                $escalasCriadasPorFuncionario[(int)$escalado['id']][$dataSql] = (int)$pdo->lastInsertId();
                 $criados++;
-            }
-
-            foreach ($funcionarioIds as $funcionarioId) {
-                if (!in_array($funcionarioId, $escaladosNoDia, true)) {
-                    criar_folga_automatica($pdo, $funcionarioId, $dataSql, 'Folga automatica por ausencia de escala no dia');
-                }
             }
 
             $diasProcessados++;
             $dataAtual->modify('+1 day');
+        }
+
+        foreach ($funcionarioIds as $funcionarioId) {
+            aplicar_home_office_automatico($pdo, $escalasCriadasPorFuncionario[$funcionarioId], 2, $indiceFuncionario[$funcionarioId] ?? 0);
+
+            $datasEscaladas = array_flip($datasEscaladasPorFuncionario[$funcionarioId]);
+            $candidatasFolga = array_values(array_filter($diasPeriodo, function ($data) use ($datasEscaladas) {
+                return !isset($datasEscaladas[$data]);
+            }));
+
+            if (!$incluirDomingo && count($diasDomingo) >= 2) {
+                $candidatasFolga = $diasDomingo;
+            }
+
+            $datasFolga = escolher_datas_distribuidas($candidatasFolga, 2, $indiceFuncionario[$funcionarioId] ?? 0);
+            foreach ($datasFolga as $dataFolga) {
+                criar_folga_automatica($pdo, $funcionarioId, $dataFolga, 'Folga mensal automatica');
+            }
         }
 
         $pdo->commit();
