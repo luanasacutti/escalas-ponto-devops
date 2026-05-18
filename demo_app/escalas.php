@@ -22,26 +22,6 @@ function funcionario_tem_folga(PDO $pdo, int $funcionarioId, string $data): bool
     return (int)$stmt->fetchColumn() > 0;
 }
 
-function criar_folga_automatica(PDO $pdo, int $funcionarioId, string $data, string $observacao): void {
-    $stmtExiste = $pdo->prepare("
-        SELECT COUNT(*)
-        FROM folgas
-        WHERE funcionario_id = ?
-          AND ? BETWEEN data_inicio AND data_fim
-    ");
-    $stmtExiste->execute([$funcionarioId, $data]);
-
-    if ((int)$stmtExiste->fetchColumn() > 0) {
-        return;
-    }
-
-    $stmtInserir = $pdo->prepare("
-        INSERT INTO folgas (funcionario_id, data_inicio, data_fim, tipo, status, observacoes)
-        VALUES (?, ?, ?, 'folga_compensatoria', 'aprovado', ?)
-    ");
-    $stmtInserir->execute([$funcionarioId, $data, $data, $observacao]);
-}
-
 function escolher_datas_distribuidas(array $datas, int $quantidade, int $deslocamento = 0): array {
     $datas = array_values(array_unique($datas));
     $total = count($datas);
@@ -65,12 +45,15 @@ function escolher_datas_distribuidas(array $datas, int $quantidade, int $desloca
     return array_values(array_unique($selecionadas));
 }
 
-function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int $quantidade, int $deslocamento = 0): int {
+function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int $quantidade, int $deslocamento = 0, array &$datasHomeOfficeUsadas = []): int {
     if (!$escalasFuncionario) {
         return 0;
     }
 
-    $selecionadas = escolher_datas_distribuidas(array_keys($escalasFuncionario), $quantidade, $deslocamento);
+    $datasDisponiveis = array_values(array_filter(array_keys($escalasFuncionario), function ($data) use ($datasHomeOfficeUsadas) {
+        return !in_array($data, $datasHomeOfficeUsadas, true);
+    }));
+    $selecionadas = escolher_datas_distribuidas($datasDisponiveis, $quantidade, $deslocamento);
     $stmt = $pdo->prepare("
         UPDATE escalas
         SET tipo = 'remoto', observacoes = 'Home office automatico'
@@ -80,6 +63,7 @@ function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int
     $atualizadas = 0;
     foreach ($selecionadas as $data) {
         $stmt->execute([(int)$escalasFuncionario[$data]]);
+        $datasHomeOfficeUsadas[] = $data;
         $atualizadas += $stmt->rowCount();
     }
 
@@ -108,38 +92,6 @@ function turno_tem_escala_no_dia(PDO $pdo, int $turnoId, string $data, ?int $ign
     }
 
     return (int)$stmt->fetchColumn() > 0;
-}
-
-function registrar_folga_manual(PDO $pdo, int $funcionarioId, string $dataInicio, string $dataFim, string $tipo, string $observacoes): int {
-    $inicio = DateTime::createFromFormat('Y-m-d', $dataInicio);
-    $fim = DateTime::createFromFormat('Y-m-d', $dataFim);
-
-    if (!$inicio || !$fim || $inicio > $fim) {
-        throw new Exception('Informe um periodo valido para a folga.');
-    }
-
-    $pdo->beginTransaction();
-    try {
-        $stmtFolga = $pdo->prepare('
-            INSERT INTO folgas (funcionario_id, data_inicio, data_fim, tipo, status, observacoes)
-            VALUES (?, ?, ?, ?, "aprovado", ?)
-        ');
-        $stmtFolga->execute([$funcionarioId, $dataInicio, $dataFim, $tipo, $observacoes]);
-
-        $stmtRemoverEscalas = $pdo->prepare('
-            DELETE FROM escalas
-            WHERE funcionario_id = ?
-              AND data_escala BETWEEN ? AND ?
-        ');
-        $stmtRemoverEscalas->execute([$funcionarioId, $dataInicio, $dataFim]);
-        $removidas = $stmtRemoverEscalas->rowCount();
-
-        $pdo->commit();
-        return $removidas;
-    } catch (Exception $e) {
-        $pdo->rollBack();
-        throw $e;
-    }
 }
 
 function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim, array $turnosSelecionados, bool $incluirDomingo, array $funcionariosSelecionados = []): array {
@@ -225,8 +177,6 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
     $criados = 0;
     $ignorados = 0;
     $detalhes = [];
-    $diasPeriodo = [];
-    $diasDomingo = [];
     $datasEscaladasPorFuncionario = [];
     $escalasCriadasPorFuncionario = [];
     foreach ($funcionarioIds as $funcionarioId) {
@@ -242,12 +192,8 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
         while ($dataAtual <= $fim) {
             $dataSql = $dataAtual->format('Y-m-d');
             $diaSemana = (int)$dataAtual->format('w');
-            $diasPeriodo[] = $dataSql;
-            if ($diaSemana === 0) {
-                $diasDomingo[] = $dataSql;
-            }
 
-            if ($diaSemana === 0 && !$incluirDomingo) {
+            if ($diaSemana === 0 || $diaSemana === 6) {
                 $dataAtual->modify('+1 day');
                 continue;
             }
@@ -335,22 +281,9 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
             $dataAtual->modify('+1 day');
         }
 
+        $datasHomeOfficeUsadas = [];
         foreach ($funcionarioIds as $funcionarioId) {
-            aplicar_home_office_automatico($pdo, $escalasCriadasPorFuncionario[$funcionarioId], 2, $indiceFuncionario[$funcionarioId] ?? 0);
-
-            $datasEscaladas = array_flip($datasEscaladasPorFuncionario[$funcionarioId]);
-            $candidatasFolga = array_values(array_filter($diasPeriodo, function ($data) use ($datasEscaladas) {
-                return !isset($datasEscaladas[$data]);
-            }));
-
-            if (!$incluirDomingo && count($diasDomingo) >= 2) {
-                $candidatasFolga = $diasDomingo;
-            }
-
-            $datasFolga = escolher_datas_distribuidas($candidatasFolga, 2, $indiceFuncionario[$funcionarioId] ?? 0);
-            foreach ($datasFolga as $dataFolga) {
-                criar_folga_automatica($pdo, $funcionarioId, $dataFolga, 'Folga mensal automatica');
-            }
+            aplicar_home_office_automatico($pdo, $escalasCriadasPorFuncionario[$funcionarioId], 2, $indiceFuncionario[$funcionarioId] ?? 0, $datasHomeOfficeUsadas);
         }
 
         $pdo->commit();
@@ -390,10 +323,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $turnoId = (int)($_POST['turno_id'] ?? 0);
             $dataEscala = $_POST['data_escala'] ?? '';
 
-            if (funcionario_tem_folga($pdo, $funcionarioId, $dataEscala)) {
-                throw new Exception('Este funcionario esta de folga ou ferias nesta data.');
-            }
-
             if (funcionario_tem_escala_no_dia($pdo, $funcionarioId, $dataEscala)) {
                 throw new Exception('Este funcionario ja possui escala nesta data.');
             }
@@ -410,10 +339,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $funcionarioId = (int)($_POST['funcionario_id'] ?? 0);
             $turnoId = (int)($_POST['turno_id'] ?? 0);
             $dataEscala = $_POST['data_escala'] ?? '';
-
-            if (funcionario_tem_folga($pdo, $funcionarioId, $dataEscala)) {
-                throw new Exception('Este funcionario esta de folga ou ferias nesta data.');
-            }
 
             if (funcionario_tem_escala_no_dia($pdo, $funcionarioId, $dataEscala, $escalaId)) {
                 throw new Exception('Este funcionario ja possui outra escala nesta data.');
@@ -434,16 +359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $pdo->prepare('DELETE FROM escalas WHERE id = ?');
             $stmt->execute([(int)($_POST['escala_id'] ?? 0)]);
             $mensagem = 'Escala removida.';
-        } elseif ($acao === 'registrar_folga') {
-            $removidas = registrar_folga_manual(
-                $pdo,
-                (int)($_POST['funcionario_id'] ?? 0),
-                $_POST['data_inicio_folga'] ?? '',
-                $_POST['data_fim_folga'] ?? '',
-                $_POST['tipo_folga'] ?? 'folga_compensatoria',
-                $_POST['observacoes'] ?? 'Folga registrada manualmente'
-            );
-            $mensagem = "Folga/ferias registrada. {$removidas} escala(s) removida(s) do periodo.";
         }
     } catch (Exception $e) {
         $mensagem = 'Nao foi possivel processar a escala. ' . $e->getMessage();
@@ -491,28 +406,6 @@ $escalasMes = $stmtEscalasMes->fetchAll(PDO::FETCH_ASSOC);
 $escalasPorData = [];
 foreach ($escalasMes as $escala) {
     $escalasPorData[$escala['data_escala']][] = $escala;
-}
-
-$stmtFolgasMes = $pdo->prepare('
-    SELECT f.nome funcionario, fo.data_inicio, fo.data_fim, fo.tipo, fo.observacoes
-    FROM folgas fo
-    JOIN funcionarios f ON f.id = fo.funcionario_id
-    WHERE f.ativo = 1
-      AND fo.status = "aprovado"
-      AND fo.data_inicio <= ?
-      AND fo.data_fim >= ?
-    ORDER BY f.nome
-');
-$stmtFolgasMes->execute([$fimMes, $inicioMes]);
-$folgasPorData = [];
-foreach ($stmtFolgasMes->fetchAll(PDO::FETCH_ASSOC) as $folga) {
-    $inicioFolga = new DateTime(max($folga['data_inicio'], $inicioMes));
-    $fimFolga = new DateTime(min($folga['data_fim'], $fimMes));
-
-    while ($inicioFolga <= $fimFolga) {
-        $folgasPorData[$inicioFolga->format('Y-m-d')][] = $folga;
-        $inicioFolga->modify('+1 day');
-    }
 }
 
 $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala, f.nome funcionario, t.nome turno, e.tipo, e.observacoes FROM escalas e JOIN funcionarios f ON f.id = e.funcionario_id JOIN turnos t ON t.id = e.turno_id WHERE f.ativo = 1 ORDER BY e.data_escala DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
@@ -600,8 +493,8 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                 <a href="escalas.php?mes=<?= h($proximoMes) ?>">›</a>
             </div>
             <label class="mini-check"><input type="checkbox" checked> Turno</label>
-            <label class="mini-check"><input type="checkbox" checked> Feriado</label>
-            <label class="mini-check"><input type="checkbox" name="incluir_domingo"> Sobreaviso</label>
+            <label class="mini-check"><input type="checkbox" checked> Segunda a sexta</label>
+            <label class="mini-check"><input type="checkbox" checked> 2 home office por pessoa</label>
         </div>
 
         <div class="calendar-grid">
@@ -618,7 +511,6 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                 $dentroDoMes = $numeroDia >= 1 && $numeroDia <= $diasNoMes;
                 $dataCelula = $dentroDoMes ? sprintf('%s-%02d', $mesReferencia, $numeroDia) : '';
                 $itensDia = $dataCelula ? ($escalasPorData[$dataCelula] ?? []) : [];
-                $folgasDia = $dataCelula ? ($folgasPorData[$dataCelula] ?? []) : [];
             ?>
                 <div class="calendar-day <?= $dentroDoMes ? '' : 'muted-day' ?>">
                     <?php if ($dentroDoMes): ?>
@@ -627,12 +519,6 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                             <div class="shift-pill tipo-<?= h($item['tipo']) ?>">
                                 <span><?= h($item['turno']) ?></span>
                                 <?= h($item['funcionario']) ?>
-                            </div>
-                        <?php endforeach; ?>
-                        <?php foreach ($folgasDia as $folga): ?>
-                            <div class="shift-pill tipo-folga">
-                                <span>Folga</span>
-                                <?= h($folga['funcionario']) ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -654,27 +540,9 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
         <select name="funcionario_id" required><?php foreach ($funcionarios as $f): ?><option value="<?= $f['id'] ?>"><?= h($f['nome']) ?></option><?php endforeach; ?></select>
         <select name="turno_id" required><?php foreach ($turnos as $t): ?><option value="<?= $t['id'] ?>"><?= h($t['nome']) ?></option><?php endforeach; ?></select>
         <input type="date" name="data_escala" required>
-        <select name="tipo"><option>normal</option><option>plantao</option><option>remoto</option><option>folga</option></select>
+        <select name="tipo"><option>normal</option><option>plantao</option><option>remoto</option></select>
         <input name="observacoes" placeholder="Observacoes">
         <button>Cadastrar escala</button>
-    </form>
-</section>
-
-<section class="panel">
-    <h2>Registrar ferias ou folga</h2>
-    <form method="post" class="grid-form vacation-form">
-        <input type="hidden" name="acao" value="registrar_folga">
-        <select name="funcionario_id" required><?php foreach ($funcionarios as $f): ?><option value="<?= $f['id'] ?>"><?= h($f['nome']) ?></option><?php endforeach; ?></select>
-        <input type="date" name="data_inicio_folga" required>
-        <input type="date" name="data_fim_folga" required>
-        <select name="tipo_folga" required>
-            <option value="ferias">Ferias</option>
-            <option value="folga_compensatoria">Folga compensatoria</option>
-            <option value="licenca">Licenca</option>
-            <option value="atestado">Atestado</option>
-        </select>
-        <input name="observacoes" placeholder="Motivo ou observacoes">
-        <button>Registrar e liberar periodo</button>
     </form>
 </section>
 
@@ -701,7 +569,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
                             <?php endforeach; ?>
                         </select>
                     </td>
-                    <td><select name="tipo"><option <?= $e['tipo'] === 'normal' ? 'selected' : '' ?>>normal</option><option <?= $e['tipo'] === 'plantao' ? 'selected' : '' ?>>plantao</option><option <?= $e['tipo'] === 'remoto' ? 'selected' : '' ?>>remoto</option><option <?= $e['tipo'] === 'folga' ? 'selected' : '' ?>>folga</option></select></td>
+                    <td><select name="tipo"><option <?= $e['tipo'] === 'normal' ? 'selected' : '' ?>>normal</option><option <?= $e['tipo'] === 'plantao' ? 'selected' : '' ?>>plantao</option><option <?= $e['tipo'] === 'remoto' ? 'selected' : '' ?>>remoto</option></select></td>
                     <td><input name="observacoes" value="<?= h($e['observacoes'] ?? '') ?>"></td>
                     <td class="table-actions">
                         <button name="acao" value="atualizar_escala">Salvar</button>
