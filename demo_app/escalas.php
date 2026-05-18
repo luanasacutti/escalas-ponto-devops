@@ -45,15 +45,16 @@ function escolher_datas_distribuidas(array $datas, int $quantidade, int $desloca
     return array_values(array_unique($selecionadas));
 }
 
-function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int $quantidade, int $deslocamento = 0, array &$datasHomeOfficeUsadas = []): int {
+function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int $quantidade, int $deslocamento = 0, array &$homeOfficePorData = [], int $maxHomeOfficePorData = 1): int {
     if (!$escalasFuncionario) {
         return 0;
     }
 
-    $datasDisponiveis = array_values(array_filter(array_keys($escalasFuncionario), function ($data) use ($datasHomeOfficeUsadas) {
-        return !in_array($data, $datasHomeOfficeUsadas, true);
-    }));
-    $selecionadas = escolher_datas_distribuidas($datasDisponiveis, $quantidade, $deslocamento);
+    $datasDisponiveis = array_values(array_keys($escalasFuncionario));
+    if ($datasDisponiveis) {
+        $deslocamento = $deslocamento % count($datasDisponiveis);
+        $datasDisponiveis = array_merge(array_slice($datasDisponiveis, $deslocamento), array_slice($datasDisponiveis, 0, $deslocamento));
+    }
     $stmt = $pdo->prepare("
         UPDATE escalas
         SET tipo = 'remoto', observacoes = 'Home office automatico'
@@ -61,10 +62,47 @@ function aplicar_home_office_automatico(PDO $pdo, array $escalasFuncionario, int
     ");
 
     $atualizadas = 0;
-    foreach ($selecionadas as $data) {
+    foreach ($datasDisponiveis as $data) {
+        if (($homeOfficePorData[$data] ?? 0) >= $maxHomeOfficePorData) {
+            continue;
+        }
+
         $stmt->execute([(int)$escalasFuncionario[$data]]);
-        $datasHomeOfficeUsadas[] = $data;
+        $homeOfficePorData[$data] = ($homeOfficePorData[$data] ?? 0) + 1;
         $atualizadas += $stmt->rowCount();
+
+        if ($atualizadas >= $quantidade) {
+            break;
+        }
+    }
+
+    return $atualizadas;
+}
+
+function aplicar_home_office_semanal(PDO $pdo, array $escalasPorFuncionario, array $funcionarioIds, array $indiceFuncionario, int $quantidadePorSemana, int $maxHomeOfficePorData): int {
+    $homeOfficePorData = [];
+    $atualizadas = 0;
+    $semanas = [];
+
+    foreach ($escalasPorFuncionario as $funcionarioId => $escalasFuncionario) {
+        foreach ($escalasFuncionario as $data => $escalaId) {
+            $semana = (new DateTime($data))->format('o-W');
+            $semanas[$semana][$funcionarioId][$data] = $escalaId;
+        }
+    }
+
+    ksort($semanas);
+    foreach ($semanas as $funcionariosSemana) {
+        foreach ($funcionarioIds as $funcionarioId) {
+            $atualizadas += aplicar_home_office_automatico(
+                $pdo,
+                $funcionariosSemana[$funcionarioId] ?? [],
+                $quantidadePorSemana,
+                $indiceFuncionario[$funcionarioId] ?? 0,
+                $homeOfficePorData,
+                $maxHomeOfficePorData
+            );
+        }
     }
 
     return $atualizadas;
@@ -281,10 +319,14 @@ function gerar_escalas_automaticas(PDO $pdo, string $dataInicio, string $dataFim
             $dataAtual->modify('+1 day');
         }
 
-        $datasHomeOfficeUsadas = [];
-        foreach ($funcionarioIds as $funcionarioId) {
-            aplicar_home_office_automatico($pdo, $escalasCriadasPorFuncionario[$funcionarioId], 2, $indiceFuncionario[$funcionarioId] ?? 0, $datasHomeOfficeUsadas);
-        }
+        aplicar_home_office_semanal(
+            $pdo,
+            $escalasCriadasPorFuncionario,
+            $funcionarioIds,
+            $indiceFuncionario,
+            2,
+            max(count($funcionarioIds) - 1, 1)
+        );
 
         $pdo->commit();
     } catch (Exception $e) {
@@ -494,7 +536,7 @@ $escalas = $pdo->query('SELECT e.id, e.funcionario_id, e.turno_id, e.data_escala
             </div>
             <label class="mini-check"><input type="checkbox" checked> Turno</label>
             <label class="mini-check"><input type="checkbox" checked> Segunda a sexta</label>
-            <label class="mini-check"><input type="checkbox" checked> 2 home office por pessoa</label>
+            <label class="mini-check"><input type="checkbox" checked> 2 home office por semana</label>
         </div>
 
         <div class="calendar-grid">
