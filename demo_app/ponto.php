@@ -7,12 +7,15 @@ $funcionarioId = (int)($_POST['funcionario_id'] ?? $_GET['funcionario_id'] ?? 1)
 $acao = $_POST['acao'] ?? '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $acao) {
-    $stmt = $pdo->prepare('SELECT * FROM registros_ponto WHERE funcionario_id = ? AND data_ponto = CURDATE()');
-    $stmt->execute([$funcionarioId]);
+    $hoje = data_hoje_sql();
+    $agora = agora_sql();
+
+    $stmt = $pdo->prepare('SELECT * FROM registros_ponto WHERE funcionario_id = ? AND data_ponto = ?');
+    $stmt->execute([$funcionarioId, $hoje]);
     $ponto = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$ponto) {
-        $pdo->prepare('INSERT INTO registros_ponto (funcionario_id, data_ponto) VALUES (?, CURDATE())')->execute([$funcionarioId]);
+        $pdo->prepare('INSERT INTO registros_ponto (funcionario_id, data_ponto) VALUES (?, ?)')->execute([$funcionarioId, $hoje]);
     }
 
     $colunas = [
@@ -24,8 +27,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $acao) {
 
     if (isset($colunas[$acao])) {
         $coluna = $colunas[$acao];
-        $stmt = $pdo->prepare("UPDATE registros_ponto SET $coluna = NOW(), status = IF('$coluna' = 'saida', 'fechado', 'aberto') WHERE funcionario_id = ? AND data_ponto = CURDATE() AND $coluna IS NULL");
-        $stmt->execute([$funcionarioId]);
+        $status = $coluna === 'saida' ? 'fechado' : 'aberto';
+        $stmt = $pdo->prepare("UPDATE registros_ponto SET $coluna = ?, status = ? WHERE funcionario_id = ? AND data_ponto = ? AND $coluna IS NULL");
+        $stmt->execute([$agora, $status, $funcionarioId, $hoje]);
         $mensagem = $stmt->rowCount() ? 'Registro realizado com sucesso.' : 'Este ponto ja foi registrado hoje.';
     }
 }
@@ -36,8 +40,8 @@ if ($funcionarios && !in_array($funcionarioId, $idsFuncionarios, true)) {
     $funcionarioId = (int)$funcionarios[0]['id'];
 }
 
-$stmt = $pdo->prepare('SELECT * FROM registros_ponto WHERE funcionario_id = ? AND data_ponto = CURDATE()');
-$stmt->execute([$funcionarioId]);
+$stmt = $pdo->prepare('SELECT * FROM registros_ponto WHERE funcionario_id = ? AND data_ponto = ?');
+$stmt->execute([$funcionarioId, data_hoje_sql()]);
 $pontoHoje = $stmt->fetch(PDO::FETCH_ASSOC);
 
 $funcionarioAtual = null;
@@ -48,7 +52,7 @@ foreach ($funcionarios as $funcionario) {
     }
 }
 
-$dataReferenciaTexto = $_GET['data'] ?? date('Y-m-d');
+$dataReferenciaTexto = $_GET['data'] ?? data_hoje_sql();
 $dataReferencia = DateTime::createFromFormat('Y-m-d', $dataReferenciaTexto) ?: new DateTime();
 $inicioSemana = (clone $dataReferencia)->modify('monday this week');
 $fimSemana = (clone $inicioSemana)->modify('+6 days');
@@ -126,7 +130,7 @@ $diasSemana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
                 $dataSql = $dia->format('Y-m-d');
                 $registro = $pontosSemana[$dataSql] ?? [];
             ?>
-                <tr class="<?= $dataSql === date('Y-m-d') ? 'today-row' : '' ?>">
+                <tr class="<?= $dataSql === data_hoje_sql() ? 'today-row' : '' ?>">
                     <td><strong><?= h($diasSemana[$i]) ?></strong> <?= h($dia->format('d/m')) ?></td>
                     <td>Comercial 08h - 18h</td>
                     <td>08:00</td>
@@ -144,7 +148,7 @@ $diasSemana = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
     <aside class="phone-card">
         <div class="phone-header">
             <span><?= h(date('d/m/Y')) ?></span>
-            <strong id="clock">--:--:--</strong>
+            <strong id="clock" data-server-time="<?= h(date('c')) ?>">--:--:--</strong>
         </div>
         <div class="phone-body">
             <h2><?= h($funcionarioAtual['nome'] ?? 'Funcionario') ?></h2>
