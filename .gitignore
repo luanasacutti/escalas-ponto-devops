@@ -23,3 +23,7 @@ temp/
 *.sql.gz
 *.dump
 *.bak
+
+# Documentos da entrega escolar local
+TRABALHO_FINAL.md
+INTEGRANTES.md
