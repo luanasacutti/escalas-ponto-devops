@@ -37,3 +37,4 @@ if (usuario_admin()) {
     </div>
 </section>
 <?php require_once 'footer.php'; ?>
+ 

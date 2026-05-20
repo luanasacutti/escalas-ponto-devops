@@ -141,3 +141,4 @@ Se quiser parar em segundo plano, use:
 ```bash
 docker compose -f docker-compose.php.yml down
 ```
+ 

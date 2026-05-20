@@ -31,3 +31,4 @@ $funcionarios = $pdo->query('SELECT * FROM funcionarios WHERE ativo = 1 ORDER BY
     </table>
 </section>
 <?php require_once 'footer.php'; ?>
+ 

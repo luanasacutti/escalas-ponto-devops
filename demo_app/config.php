@@ -137,3 +137,4 @@ function data_hoje_sql(): string {
 function agora_sql(): string {
     return date('Y-m-d H:i:s');
 }
+ 

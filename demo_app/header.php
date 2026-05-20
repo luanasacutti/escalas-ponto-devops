@@ -33,3 +33,4 @@ $current = basename($_SERVER['PHP_SELF']);
     <?php endif; ?>
 </aside>
 <main class="content">
+ 

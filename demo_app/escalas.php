@@ -636,3 +636,4 @@ if (!$somenteLeitura) {
 </section>
 <?php endif; ?>
 <?php require_once 'footer.php'; ?>
+ 

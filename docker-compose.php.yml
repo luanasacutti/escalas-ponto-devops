@@ -22,3 +22,4 @@
     volumes:
       - ./demo_app:/var/www/html
     command: bash -c "docker-php-ext-install pdo pdo_mysql && apache2-foreground"
+ 

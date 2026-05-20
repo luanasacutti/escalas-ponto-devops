@@ -185,3 +185,4 @@ INSERT INTO turnos (nome, hora_inicio, hora_fim, carga_horaria) VALUES
 ('Manha', '08:00:00', '12:00:00', 4),
 ('Tarde', '13:00:00', '18:00:00', 5),
 ('Noite', '18:00:00', '23:00:00', 5);
+ 
