@@ -1,6 +1,6 @@
 # Escalas e Ponto DevOps
 
-Sistema escolar para gerenciamento de escalas de trabalho e relogio de ponto, desenvolvido com PHP, MySQL, HTML, CSS e JavaScript.
+Sistema para gerenciamento de escalas de trabalho e relogio de ponto, desenvolvido com PHP, MySQL, HTML, CSS e JavaScript.
 
 ## Funcionalidades
 
